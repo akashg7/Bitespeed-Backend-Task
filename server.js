@@ -20,8 +20,41 @@ server.get('/' , (req , res)=>{
 server.post('/identify' , async (req , res)=>{
     const {email , phoneNumber} = req.body
     console.log(email , phoneNumber)
+    if (!email && !phoneNumber){
+        res.status(400).json({"message" : "Either mail or phoneNumber must be provided"})
+    } 
+    try{
+        const existingContacts = await prisma.Contact.findMany({
+            where :{
+                OR : [
+                    {email } , {phoneNumber}
+                ]
+            }
+        })
+
+        if (existingContacts.length === 0){
+            const primaryContact = await prisma.Contact.create({
+                data:{
+                    email ,
+                    phoneNumber , 
+                    linkPrecedence : "primary",
+                }
+            })
+
+            return res.status(200).json({
+                "contact":{
+                    "primaryContatctId": primaryContact.id,
+                    "emails": [primaryContact.email],
+                    "phoneNumbers": [primaryContact.phoneNumber],
+                    "secondaryContactIds": []
+                }
+            })
+        }
+    } catch(err){
+        console.log(err)
+    }
     res.status(200).json({email , phoneNumber})
-})
+});
 
 server.listen(port , ()=>{
     console.log(`server running on port ${port}`)
