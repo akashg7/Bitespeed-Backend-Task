@@ -48,27 +48,27 @@ server.post("/identify", async (req, res) => {
         primaryContacts.sort((a, b) => a.createdAt - b.createdAt); // sorting by the time created
         primaryContact = primaryContacts[0]; // old one becomes the primary
 
-        // converting other primary contacts to secondary and re-linking their secondaries
-        for (let i = 1; i < primaryContacts.length; i++) {
-          const currentPrimary = primaryContacts[i];
+ // converting other primary contact to secondary and re-linking their secondaries
 
-          // updaing the current primary contact to secondary contact
-          await prisma.contact.update({
-            where: { id: currentPrimary.id },
-            data: {
-              linkedId: primaryContact.id,
-              linkPrecedence: "secondary",
-            },
-          });
+  const otherPrimaryIds = primaryContacts.slice(1).map((contact) => contact.id);
 
-          // edge case where im handling the contact which is going to be the secondary contact,
-          // its secondary contacts now should point to the new primary contact
-          await prisma.contact.updateMany({
-            where: { linkedId: currentPrimary.id },
-            data: { linkedId: primaryContact.id },
-          });
-        }
-      } else {
+  await prisma.$transaction([
+    prisma.contact.updateMany({     //updaing the current primary contact to secondary contact
+      where: { id: { in: otherPrimaryIds } },
+      data: {
+        linkedId: primaryContact.id,
+        linkPrecedence: "secondary",
+      },
+    }),
+    // edge case where im handling the contact which is going to be the secondary contact,
+    // its secondary contacts now should point to the new primary contact
+    prisma.contact.updateMany({
+      where: { linkedId: { in: otherPrimaryIds } },
+      data: { linkedId: primaryContact.id },
+    }),
+  ]);
+} 
+    else {
         primaryContact = primaryContacts[0];
       }
 
