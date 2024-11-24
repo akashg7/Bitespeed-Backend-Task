@@ -15,6 +15,12 @@ server.get("/", (req, res) => {
   return res.status(200).json({ message: "Hello Bitespeed" });
 });
 
+const isValidEmail = (email) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  
 //identify endpoint
 server.post("/identify", async (req, res) => {
   const { email, phoneNumber } = req.body;
@@ -25,13 +31,20 @@ server.post("/identify", async (req, res) => {
       .json({ message: "Either email or phoneNumber must be provided" });
   }
 
+  if (email && !isValidEmail(email)) {
+    return res.status(400).json({ message: "Invalid email format" });
+  }
+
   try {
     const existingContacts = await prisma.contact.findMany({
-      where: {
-        OR: [{ email }, { phoneNumber }],
-      },
-      orderBy: { createdAt: "asc" },
-    });
+        where: {
+          OR: [
+            email ? { email } : undefined,
+            phoneNumber ? { phoneNumber } : undefined,
+          ].filter(Boolean), // Removes undefined conditions
+        },
+        orderBy: { createdAt: "asc" },
+      });
 
     let primaryContact = null;
     let relatedContacts = [];
