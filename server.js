@@ -1,69 +1,146 @@
-const express = require('express')
-require('dotenv').config()
-const cors = require('cors')
-const bodyParser = require('body-parser')
-const connection = require('./src/config/db')
-const { PrismaClient } = require('@prisma/client')
-const port = 3000
+const express = require("express");
+require("dotenv").config();
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const connection = require("./src/config/db");
+const { PrismaClient } = require("@prisma/client");
+const { time } = require("console");
+const port = 3000;
 
-const server = express()
+const server = express();
 
-
-server.use(cors())
-server.use(bodyParser.json())
+server.use(cors());
+server.use(bodyParser.json());
 const prisma = new PrismaClient();
-server.get('/' , (req , res)=>{
-    return res.status(200).json({"message" : "Hello Bitespeed"}) 
-})
-
-//identify endpoint
-server.post('/identify' , async (req , res)=>{
-    const {email , phoneNumber} = req.body
-    console.log(email , phoneNumber)
-    if (!email && !phoneNumber){
-        res.status(400).json({"message" : "Either mail or phoneNumber must be provided"})
-    } 
-    try{
-        const existingContacts = await prisma.Contact.findMany({
-            where :{
-                OR : [
-                    {email } , {phoneNumber}
-                ]
-            }
-        })
-
-        if (existingContacts.length === 0){
-            const primaryContact = await prisma.Contact.create({
-                data:{
-                    email ,
-                    phoneNumber , 
-                    linkPrecedence : "primary",
-                }
-            })
-
-            return res.status(200).json({
-                "contact":{
-                    "primaryContatctId": primaryContact.id,
-                    "emails": [primaryContact.email],
-                    "phoneNumbers": [primaryContact.phoneNumber],
-                    "secondaryContactIds": []
-                }
-            })
-        }
-    } catch(err){
-        console.log(err)
-    }
-    res.status(200).json({email , phoneNumber})
+server.get("/", (req, res) => {
+  return res.status(200).json({ message: "Hello Bitespeed" });
 });
 
-server.listen(port , ()=>{
-    console.log(`server running on port ${port}`)
-})
+//identify endpoint
+server.post("/identify", async (req, res) => {
+  const { email, phoneNumber } = req.body;
 
+  if (!email && !phoneNumber) {
+    return res
+      .status(400)
+      .json({ message: "Either email or phoneNumber must be provided" });
+  }
 
+  try {
+    const existingContacts = await prisma.contact.findMany({
+      where: {
+        OR: [{ email }, { phoneNumber }],
+      },
+      orderBy: { createdAt: "asc" },
+    });
 
+    let primaryContact = null;
+    let relatedContacts = [];
+    let emails = [];
+    let phoneNumbers = [];
+    let linkedContactIds = [];
 
+    if (existingContacts.length > 0) {
+      const primaryContacts = existingContacts.filter(
+        (contact) => contact.linkPrecedence === "primary"
+      );
 
+      if (primaryContacts.length > 1) {
+        primaryContacts.sort((a, b) => a.createdAt - b.createdAt); // sorting by the time created
+        primaryContact = primaryContacts[0]; // old one becomes the primary
 
+        // converting other primary contacts to secondary and re-linking their secondaries
+        for (let i = 1; i < primaryContacts.length; i++) {
+          const currentPrimary = primaryContacts[i];
 
+          // updaing the current primary contact to secondary contact
+          await prisma.contact.update({
+            where: { id: currentPrimary.id },
+            data: {
+              linkedId: primaryContact.id,
+              linkPrecedence: "secondary",
+            },
+          });
 
+          // edge case where im handling the contact which is going to be the secondary contact,
+          // its secondary contacts now should point to the new primary contact
+          await prisma.contact.updateMany({
+            where: { linkedId: currentPrimary.id },
+            data: { linkedId: primaryContact.id },
+          });
+        }
+      } else {
+        primaryContact = primaryContacts[0];
+      }
+
+      relatedContacts = await prisma.contact.findMany({
+        where: {
+          OR: [{ id: primaryContact.id }, { linkedId: primaryContact.id }],
+        },
+      });
+
+      emails = [
+        ...new Set(
+          relatedContacts.map((contact) => contact.email).filter(Boolean)
+        ),
+      ];
+      phoneNumbers = [
+        ...new Set(
+          relatedContacts.map((contact) => contact.phoneNumber).filter(Boolean)
+        ),
+      ];
+      linkedContactIds = relatedContacts
+        .filter((contact) => contact.id !== primaryContact.id)
+        .map((contact) => contact.id);
+
+      //creating the sec contact
+      const isNewEmail = email && !emails.includes(email);
+      const isNewPhoneNumber =
+        phoneNumber && !phoneNumbers.includes(phoneNumber);
+
+      if (isNewEmail || isNewPhoneNumber) {
+        const newContact = await prisma.contact.create({
+          data: {
+            email: isNewEmail ? email : null,
+            phoneNumber: isNewPhoneNumber ? phoneNumber : null,
+            linkedId: primaryContact.id,
+            linkPrecedence: "secondary",
+          },
+        });
+
+        if (isNewEmail) emails.push(email);
+        if (isNewPhoneNumber) phoneNumbers.push(phoneNumber);
+        linkedContactIds.push(newContact.id);
+      }
+    } else {
+      //here im creating the new contact
+      primaryContact = await prisma.contact.create({
+        data: {
+          email,
+          phoneNumber,
+          linkPrecedence: "primary",
+        },
+      });
+
+      emails = email ? [email] : [];
+      phoneNumbers = phoneNumber ? [phoneNumber] : [];
+    }
+
+    //returnig the res
+    return res.status(200).json({
+      contact: {
+        primaryContactId: primaryContact.id,
+        emails,
+        phoneNumbers,
+        secondaryContactIds: linkedContactIds,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+server.listen(port, () => {
+  console.log(`server running on port ${port}`);
+});
